@@ -58,9 +58,6 @@ def _build_impl(frame_sequence: pims.FramesSequence,
     lk_params = dict(winSize=(30, 30), maxLevel=3)
 
     prev_image = frame_sequence[0]
-
-    print("image resolution:", prev_image.shape)
-
     corners = cv2.goodFeaturesToTrack(prev_image, max_corners, **corner_params)
     prev_frame_corners = FrameCorners(
         np.arange(corners.shape[0]),
