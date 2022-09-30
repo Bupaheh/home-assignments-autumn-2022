@@ -48,10 +48,10 @@ class _CornerStorageBuilder:
 
 def _build_impl(frame_sequence: pims.FramesSequence,
                 builder: _CornerStorageBuilder) -> None:
-    corner_min_distance = 20
-    max_corners = 800
+    corner_min_distance = 50
+    max_corners = 200
     corner_params = dict(qualityLevel=0.01, minDistance=corner_min_distance)
-    lk_params = dict(winSize=(30, 30), maxLevel=3)
+    lk_params = dict(winSize=(20, 20), maxLevel=3)
     eigen_val_multiplier = 0.9
 
     image_0 = frame_sequence[0]
@@ -91,17 +91,21 @@ def _build_impl(frame_sequence: pims.FramesSequence,
         for point in next_pts:
             mask = cv2.circle(mask, point.round().astype(int), corner_min_distance, 0, -1)
 
+        next_pts = next_pts.reshape(next_pts.shape[0], 1, 2)
+
         if max_corners == 0:
             corners_1 = cv2.goodFeaturesToTrack(image_1, 0, mask=mask, **corner_params)
         else:
             corners_1 = cv2.goodFeaturesToTrack(image_1, max(max_corners - next_pts.shape[0], 1), mask=mask,
                                                 **corner_params)
 
-        ids = np.append(ids, np.arange(id_cnt, id_cnt + corners_1.shape[0]))
+        if corners_1 is not None:
+            next_pts = np.append(next_pts, corners_1, axis=0)
+            ids = np.append(ids, np.arange(id_cnt, id_cnt + corners_1.shape[0]))
 
         corner_frames = FrameCorners(
             ids,
-            np.append(next_pts.reshape(next_pts.shape[0], 1, 2), corners_1, axis=0),
+            next_pts,
             np.ones(ids.shape[0]) * corner_min_distance
         )
 
@@ -109,6 +113,7 @@ def _build_impl(frame_sequence: pims.FramesSequence,
         builder.set_corners_at_frame(frame, corner_frames)
         prev_corner_frames = corner_frames
         prev_corner_min_eigen_val = corner_min_eigen_val
+    kek = 8
 
 
 def build(frame_sequence: pims.FramesSequence,
