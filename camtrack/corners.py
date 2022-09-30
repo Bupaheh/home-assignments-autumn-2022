@@ -97,9 +97,10 @@ def _build_impl(frame_sequence: pims.FramesSequence,
 
         if max_corners == 0:
             corners = cv2.goodFeaturesToTrack(image, 0, mask=mask, **corner_params)
+        elif max_corners - next_pts.shape[0] > 0:
+            corners = cv2.goodFeaturesToTrack(image, max_corners - next_pts.shape[0], mask=mask, **corner_params)
         else:
-            corners = cv2.goodFeaturesToTrack(image, max(max_corners - next_pts.shape[0], 1),
-                                              mask=mask, **corner_params)
+            corners = None
 
         if corners is not None:
             next_pts = np.append(next_pts, corners, axis=0)
