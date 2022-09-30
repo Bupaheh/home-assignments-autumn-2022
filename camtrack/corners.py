@@ -48,45 +48,45 @@ class _CornerStorageBuilder:
 
 def _build_impl(frame_sequence: pims.FramesSequence,
                 builder: _CornerStorageBuilder) -> None:
-    corner_min_distance = 50
-    max_corners = 200
-    corner_params = dict(qualityLevel=0.01, minDistance=corner_min_distance)
+    corner_min_distance = 30
+    max_corners = 500
+    quality_level = 0.05
+    block_size = 15
+    corner_params = dict(qualityLevel=quality_level, minDistance=corner_min_distance, blockSize=block_size)
     lk_params = dict(winSize=(20, 20), maxLevel=3)
-    eigen_val_multiplier = 0.9
 
-    image_0 = frame_sequence[0]
-    corners = cv2.goodFeaturesToTrack(image_0, max_corners, **corner_params)
-    prev_corner_frames = FrameCorners(
+    prev_image = frame_sequence[0]
+    corners = cv2.goodFeaturesToTrack(prev_image, max_corners, **corner_params)
+    prev_frame_corners = FrameCorners(
         np.arange(corners.shape[0]),
         corners,
         np.ones(corners.shape[0]) * corner_min_distance
     )
-    prev_corner_min_eigen_val = cv2.cornerMinEigenVal(image_0, corner_min_distance).T
-    builder.set_corners_at_frame(0, prev_corner_frames)
+    prev_min_eigen_val_max = cv2.cornerMinEigenVal(prev_image, block_size).max()
+    builder.set_corners_at_frame(0, prev_frame_corners)
 
     id_cnt = corners.shape[0]
-    for frame, image_1 in enumerate(frame_sequence[1:], 1):
-        next_pts, statuses, _ = cv2.calcOpticalFlowPyrLK(np.ubyte(image_0 * 255), np.ubyte(image_1 * 255),
-                                                         prev_corner_frames.points, None, **lk_params)
-        ids = prev_corner_frames.ids.reshape(prev_corner_frames.ids.shape[0])
-        statuses = statuses.reshape(statuses.shape[0])
+    for frame, image in enumerate(frame_sequence[1:], 1):
+        next_pts, statuses, _ = cv2.calcOpticalFlowPyrLK(np.ubyte(prev_image * 255), np.ubyte(image * 255),
+                                                         prev_frame_corners.points, None, **lk_params)
+        ids = prev_frame_corners.ids.flatten()
+        statuses = statuses.flatten()
 
-        corner_min_eigen_val = cv2.cornerMinEigenVal(image_1, corner_min_distance).T
+        corner_min_eigen_val = cv2.cornerMinEigenVal(image, block_size).T
         flag = np.full(ids.shape[0], False)
-        for i, (next_pt, pt, status) in enumerate(zip(next_pts, prev_corner_frames.points, statuses)):
-            next_index = tuple(next_pt.round().astype(int))
-            index = tuple(pt.round().astype(int))
+        for i, (next_pt, status) in enumerate(zip(next_pts, statuses)):
+            index = tuple(next_pt.round().astype(int))
 
-            if status == 0 or next_index[0] >= image_1.shape[1] or next_index[1] >= image_1.shape[0]:
+            if status == 0 or index[0] >= image.shape[1] or index[1] >= image.shape[0]:
                 continue
 
-            if corner_min_eigen_val[next_index] > eigen_val_multiplier * prev_corner_min_eigen_val[index]:
+            if corner_min_eigen_val[index] > quality_level * prev_min_eigen_val_max:
                 flag[i] = True
 
         ids = ids[flag]
         next_pts = next_pts[flag]
 
-        mask = np.ubyte(np.ones(image_1.shape)) * 255
+        mask = np.ubyte(np.ones(image.shape)) * 255
 
         for point in next_pts:
             mask = cv2.circle(mask, point.round().astype(int), corner_min_distance, 0, -1)
@@ -94,26 +94,25 @@ def _build_impl(frame_sequence: pims.FramesSequence,
         next_pts = next_pts.reshape(next_pts.shape[0], 1, 2)
 
         if max_corners == 0:
-            corners_1 = cv2.goodFeaturesToTrack(image_1, 0, mask=mask, **corner_params)
+            corners = cv2.goodFeaturesToTrack(image, 0, mask=mask, **corner_params)
         else:
-            corners_1 = cv2.goodFeaturesToTrack(image_1, max(max_corners - next_pts.shape[0], 1), mask=mask,
-                                                **corner_params)
+            corners = cv2.goodFeaturesToTrack(image, max(max_corners - next_pts.shape[0], 1),
+                                              mask=mask, **corner_params)
 
-        if corners_1 is not None:
-            next_pts = np.append(next_pts, corners_1, axis=0)
-            ids = np.append(ids, np.arange(id_cnt, id_cnt + corners_1.shape[0]))
+        if corners is not None:
+            next_pts = np.append(next_pts, corners, axis=0)
+            ids = np.append(ids, np.arange(id_cnt, id_cnt + corners.shape[0]))
+            id_cnt += corners.shape[0]
 
-        corner_frames = FrameCorners(
+        prev_frame_corners = FrameCorners(
             ids,
             next_pts,
             np.ones(ids.shape[0]) * corner_min_distance
         )
+        prev_image = image
+        prev_min_eigen_val_max = corner_min_eigen_val.max()
 
-        image_0 = image_1
-        builder.set_corners_at_frame(frame, corner_frames)
-        prev_corner_frames = corner_frames
-        prev_corner_min_eigen_val = corner_min_eigen_val
-    kek = 8
+        builder.set_corners_at_frame(frame, prev_frame_corners)
 
 
 def build(frame_sequence: pims.FramesSequence,
