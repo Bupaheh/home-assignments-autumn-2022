@@ -48,19 +48,24 @@ class _CornerStorageBuilder:
 
 def _build_impl(frame_sequence: pims.FramesSequence,
                 builder: _CornerStorageBuilder) -> None:
-    corner_min_distance = 30
+    corner_min_distance = 10
     max_corners = 500
-    quality_level = 0.05
-    block_size = 15
+    quality_level = 0.08
+    block_size = 20
+    track_barrier_multiplier = 0.6
+
     corner_params = dict(qualityLevel=quality_level, minDistance=corner_min_distance, blockSize=block_size)
-    lk_params = dict(winSize=(20, 20), maxLevel=3)
+    lk_params = dict(winSize=(30, 30), maxLevel=3)
 
     prev_image = frame_sequence[0]
+
+    print("image resolution:", prev_image.shape)
+
     corners = cv2.goodFeaturesToTrack(prev_image, max_corners, **corner_params)
     prev_frame_corners = FrameCorners(
         np.arange(corners.shape[0]),
         corners,
-        np.ones(corners.shape[0]) * corner_min_distance
+        np.ones(corners.shape[0]) * block_size
     )
     prev_min_eigen_val_max = cv2.cornerMinEigenVal(prev_image, block_size).max()
     builder.set_corners_at_frame(0, prev_frame_corners)
@@ -80,7 +85,7 @@ def _build_impl(frame_sequence: pims.FramesSequence,
             if status == 0 or index[0] >= image.shape[1] or index[1] >= image.shape[0]:
                 continue
 
-            if corner_min_eigen_val[index] > quality_level * prev_min_eigen_val_max:
+            if corner_min_eigen_val[index] > track_barrier_multiplier * quality_level * prev_min_eigen_val_max:
                 flag[i] = True
 
         ids = ids[flag]
@@ -89,7 +94,7 @@ def _build_impl(frame_sequence: pims.FramesSequence,
         mask = np.ubyte(np.ones(image.shape)) * 255
 
         for point in next_pts:
-            mask = cv2.circle(mask, point.round().astype(int), corner_min_distance, 0, -1)
+            mask = cv2.circle(mask, point.round().astype(int), round(corner_min_distance / 2), 0, -1)
 
         next_pts = next_pts.reshape(next_pts.shape[0], 1, 2)
 
@@ -107,7 +112,7 @@ def _build_impl(frame_sequence: pims.FramesSequence,
         prev_frame_corners = FrameCorners(
             ids,
             next_pts,
-            np.ones(ids.shape[0]) * corner_min_distance
+            np.ones(ids.shape[0]) * block_size
         )
         prev_image = image
         prev_min_eigen_val_max = corner_min_eigen_val.max()

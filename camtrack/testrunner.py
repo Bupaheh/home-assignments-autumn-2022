@@ -216,7 +216,7 @@ def _calc_corner_track_stats(corner_storage):
     lengths = counter_array[counter_array != 0].astype(np.int64)
     if lengths.size == 0:
         return 0, 0, 0
-    return len(lengths), np.median(lengths), lengths.max()
+    return len(lengths), np.median(lengths), lengths.max(), lengths.mean()
 
 
 def _calc_frame_corner_stats(corner_storage):
@@ -255,7 +255,7 @@ def _describe_and_check_corners(corner_storage):
     click.echo('    connective points per frame: min={}, median={}'.format(
         *connective_stats
     ))
-    click.echo('    track lengths: median={}, max={}'.format(
+    click.echo('    track lengths: median={}, max={}, mean={}'.format(
         *track_stats[1:]
     ))
 
