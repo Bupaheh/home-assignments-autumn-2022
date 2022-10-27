@@ -20,6 +20,9 @@ from typing import List, Tuple
 import click
 import numpy as np
 from transforms3d.axangles import mat2axangle
+import matplotlib
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
 
 from data3d import Pose, read_poses
 
