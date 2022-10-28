@@ -30,15 +30,18 @@ from _camtrack import (
 )
 
 
-def triangulate(frames, corner_storage, known_corners, known_views, intrinsic_mat, min_angle):
+def triangulate(frames, corner_storage, known_corners, known_views, intrinsic_mat, min_angle, last_frame):
     known_corners = np.sort(known_corners)
     max_new_points = 0
     result_points3d = None
     result_ids = None
 
-    for frame1, frame2 in itertools.product(frames, frames):
-        if frame1 == frame2:
+    for frame in frames:
+        if frame == last_frame:
             continue
+
+        frame1 = frame
+        frame2 = last_frame
 
         correspondences = build_correspondences(corner_storage[frame1], corner_storage[frame2], known_corners)
 
@@ -59,24 +62,21 @@ def triangulate(frames, corner_storage, known_corners, known_views, intrinsic_ma
             continue
 
         if len(points3d) > max_new_points:
-            flag = np.isin(correspondences.ids, ids)
-            error1 = compute_reprojection_errors(points3d, correspondences.points_1[flag],
-                                                 intrinsic_mat @ known_views[frame1]).mean()
-
-            error2 = compute_reprojection_errors(points3d, correspondences.points_2[flag],
-                                                 intrinsic_mat @ known_views[frame2]).mean()
-
-            error = max(error1, error2)
-
-            if len(points3d) == 20:
-                continue
+            # flag = np.isin(correspondences.ids, ids)
+            # error1 = compute_reprojection_errors(points3d, correspondences.points_1[flag],
+            #                                      intrinsic_mat @ known_views[frame1]).mean()
+            #
+            # error2 = compute_reprojection_errors(points3d, correspondences.points_2[flag],
+            #                                      intrinsic_mat @ known_views[frame2]).mean()
+            #
+            # error = max(error1, error2)
 
             max_new_points = len(points3d)
             result_points3d = points3d
             result_ids = ids
 
     if result_points3d is not None:
-        print(f"max new points {max_new_points}, error {error}")
+        print(f"max new points {max_new_points}")
         return True, result_points3d, result_ids
     else:
         return False, None, None
@@ -97,7 +97,7 @@ def pnp(frames_queue, corner_storage, known_corners, known_points3d, intrinsic_m
     flag2 = np.isin(known_corners, corner_storage[result_frame].ids.flatten()[flag])
 
     new_view = cv2.solvePnP(known_points3d[flag2], corner_storage[result_frame].points[flag],
-                            intrinsic_mat, None)
+                            intrinsic_mat, None, flags=cv2.SOLVEPNP_ITERATIVE)
     view_mat = rodrigues_and_translation_to_view_mat3x4(new_view[1], new_view[2])
 
     error = compute_reprojection_errors(known_points3d[flag2], corner_storage[result_frame].points[flag], intrinsic_mat @ view_mat).mean()
@@ -110,6 +110,15 @@ def pnp(frames_queue, corner_storage, known_corners, known_points3d, intrinsic_m
 
 
 def pnp_ransac(frames_queue, corner_storage, known_corners, known_points3d, intrinsic_mat, min_corners, inliers):
+    frames = list(frames_queue)
+    np.random.shuffle(frames)
+    min_error = 100000
+    result_frame = None
+    result_view = None
+
+    known_points3d_cp = known_points3d.copy()
+    known_corners_cp = known_corners.copy()
+
     for frame in frames_queue:
         flag = np.isin(corner_storage[frame].ids.flatten(), known_corners)
 
@@ -118,7 +127,8 @@ def pnp_ransac(frames_queue, corner_storage, known_corners, known_points3d, intr
 
         flag2 = np.isin(known_corners, corner_storage[frame].ids.flatten()[flag])
         new_view = cv2.solvePnPRansac(known_points3d[flag2], corner_storage[frame].points[flag],
-                                      intrinsic_mat, None, reprojectionError=1.0, confidence=0.999, iterationsCount=10000)
+                                      intrinsic_mat, None, reprojectionError=8.0, confidence=0.99,
+                                      iterationsCount=100, flags=cv2.SOLVEPNP_ITERATIVE)
 
         if not new_view[0]:
             continue
@@ -128,18 +138,25 @@ def pnp_ransac(frames_queue, corner_storage, known_corners, known_points3d, intr
         error = compute_reprojection_errors(known_points3d[flag2], corner_storage[frame].points[flag],
                                             intrinsic_mat @ view_mat).mean()
 
+        outliers = np.delete(np.arange(flag2.sum()), new_view[3].flatten())
+        outliers_ids = corner_storage[frame].ids.flatten()[flag][outliers]
+        outlier_flag = np.isin(known_corners, outliers_ids)
+        known_corners = known_corners[np.logical_not(outlier_flag)]
+        known_points3d = known_points3d[np.logical_not(outlier_flag)]
+
         if error > 10.0:
             print(f"big ransac error: {error}")
+            if error < min_error:
+                result_frame = frame
+                result_view = view_mat
             continue
 
         inliers.update(corner_storage[frame].ids[flag][new_view[3].flatten()].flatten())
         print(f"ransac pnp frame: {frame}, error: {error}")
         return frame, view_mat
-        return pnp(frames_queue, corner_storage, known_corners, known_points3d, intrinsic_mat, list(inliers))
 
-
-
-    return pnp(frames_queue, corner_storage, known_corners, known_points3d, intrinsic_mat, list(inliers))
+    # return result_frame, result_view
+    return pnp(frames_queue, corner_storage, known_corners_cp, known_points3d_cp, intrinsic_mat, list(inliers))
 
 
 def track_and_calc_colors(camera_parameters: CameraParameters,
@@ -171,7 +188,7 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
     frames_queue = np.array([i for i in range(frame_count) if i != last_frames[-1] and i != last_frames[-2]])
     frames_queue = set(frames_queue)
 
-    min_angle_param = 3
+    min_angle_param = 4
 
     for i in range(frame_count - 2):
         print(len(frames_queue))
@@ -182,14 +199,14 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
             min_angle = 0
 
         result, points3d, ids = triangulate(last_frames, corner_storage, known_corners,
-                                            known_views, intrinsic_mat, min_angle)
+                                            known_views, intrinsic_mat, min_angle, last_frames[-1])
 
         if result:
             known_points3d = np.vstack((known_points3d, points3d))
             known_corners = np.append(known_corners, ids)
 
         new_frame, new_view_mat = pnp_ransac(frames_queue, corner_storage, known_corners,
-                                             known_points3d, intrinsic_mat, 20, inliers)
+                                             known_points3d, intrinsic_mat, 30, inliers)
         frames_queue.remove(new_frame)
         known_views[new_frame] = new_view_mat
         last_frames.append(new_frame)
