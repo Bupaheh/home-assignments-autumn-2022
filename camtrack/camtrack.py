@@ -22,7 +22,6 @@ from _camtrack import (
     to_opencv_camera_mat3x3,
     view_mat3x4_to_pose,
     triangulate_correspondences,
-    Correspondences,
     TriangulationParameters,
     build_correspondences,
     rodrigues_and_translation_to_view_mat3x4,
@@ -57,8 +56,24 @@ def refine_points_3d(known_points3d, known_corners, known_views, known_frames, c
 
         if len(points_2d) >= threshold:
             new_point_3d = triangulate(intrinsic_mat, views, points_2d)
-            print(f'{idx}. old: {known_points3d[idx]}, new: {new_point_3d}')
             known_points3d[idx] = new_point_3d
+
+
+def refine_views(known_frames, corner_storage, known_corners, known_points3d, intrinsic_mat, known_views, inliers):
+    inliers_list = list(inliers)
+    for frame in known_frames:
+        flag = np.isin(corner_storage[frame].ids.flatten(), inliers_list)
+
+        flag2 = np.isin(known_corners, corner_storage[frame].ids.flatten()[flag])
+        new_view = cv2.solvePnPRansac(known_points3d[flag2], corner_storage[frame].points[flag],
+                                      intrinsic_mat, None, reprojectionError=8.0, confidence=0.99,
+                                      iterationsCount=100, flags=cv2.SOLVEPNP_ITERATIVE)
+
+        if not new_view[0]:
+            continue
+
+        view_mat = rodrigues_and_translation_to_view_mat3x4(new_view[1], new_view[2])
+        known_views[frame] = view_mat
 
 
 def triangulate_2(frames, corner_storage, known_corners, known_views, intrinsic_mat, min_angle, last_frame):
@@ -93,21 +108,12 @@ def triangulate_2(frames, corner_storage, known_corners, known_views, intrinsic_
             continue
 
         if len(points3d) > max_new_points:
-            # flag = np.isin(correspondences.ids, ids)
-            # error1 = compute_reprojection_errors(points3d, correspondences.points_1[flag],
-            #                                      intrinsic_mat @ known_views[frame1]).mean()
-            #
-            # error2 = compute_reprojection_errors(points3d, correspondences.points_2[flag],
-            #                                      intrinsic_mat @ known_views[frame2]).mean()
-            #
-            # error = max(error1, error2)
-
             max_new_points = len(points3d)
             result_points3d = points3d
             result_ids = ids
 
     if result_points3d is not None:
-        print(f"max new points {max_new_points}")
+        print(f"New triangulated points: {len(result_points3d)}")
         return True, result_points3d, result_ids
     else:
         return False, None, None
@@ -131,11 +137,7 @@ def pnp(frames_queue, corner_storage, known_corners, known_points3d, intrinsic_m
                             intrinsic_mat, None, flags=cv2.SOLVEPNP_ITERATIVE)
     view_mat = rodrigues_and_translation_to_view_mat3x4(new_view[1], new_view[2])
 
-    error = compute_reprojection_errors(known_points3d[flag2], corner_storage[result_frame].points[flag], intrinsic_mat @ view_mat).mean()
-    print(f"regular pnp frame: {result_frame}, inliers: {max_inliers}, isok: {new_view[0]}, error: {error}")
-
-    if error > 1000:
-        print(f'bad frame {result_frame}')
+    print(f"New frame №{result_frame}. Inliers: {len(inliers)}")
 
     return result_frame, view_mat
 
@@ -143,9 +145,6 @@ def pnp(frames_queue, corner_storage, known_corners, known_points3d, intrinsic_m
 def pnp_ransac(frames_queue, corner_storage, known_corners, known_points3d, intrinsic_mat, min_corners, inliers):
     frames = list(frames_queue)
     np.random.shuffle(frames)
-    min_error = 100000
-    result_frame = None
-    result_view = None
 
     known_points3d_cp = known_points3d.copy()
     known_corners_cp = known_corners.copy()
@@ -176,17 +175,13 @@ def pnp_ransac(frames_queue, corner_storage, known_corners, known_points3d, intr
         known_points3d = known_points3d[np.logical_not(outlier_flag)]
 
         if error > 10.0:
-            print(f"big ransac error: {error}")
-            if error < min_error:
-                result_frame = frame
-                result_view = view_mat
             continue
 
+        print(f"New frame №{frame}. Inliers: {len(new_view[3])}")
+
         inliers.update(corner_storage[frame].ids[flag][new_view[3].flatten()].flatten())
-        print(f"ransac pnp frame: {frame}, error: {error}")
         return frame, view_mat
 
-    # return result_frame, result_view
     return pnp(frames_queue, corner_storage, known_corners_cp, known_points3d_cp, intrinsic_mat, list(inliers))
 
 
@@ -222,7 +217,7 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
     min_angle_param = 4
 
     for i in range(frame_count - 2):
-        print(len(frames_queue))
+        print(f"Frames left: {frame_count - 2 - i}")
 
         min_angle = min_angle_param
 
@@ -242,8 +237,12 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
         known_views[new_frame] = new_view_mat
         last_frames.append(new_frame)
 
-        if i % 20 == 0:
+        print(f"Size of point cloud: {len(known_points3d)}")
+        print("-------------------------------")
+
+        if i % 20 == 0 and i != 0:
             refine_points_3d(known_points3d, known_corners, known_views, last_frames, corner_storage, intrinsic_mat)
+            refine_views(last_frames, corner_storage, known_corners, known_points3d, intrinsic_mat, known_views, inliers)
 
     point_cloud_builder = PointCloudBuilder(known_corners,
                                             known_points3d)
