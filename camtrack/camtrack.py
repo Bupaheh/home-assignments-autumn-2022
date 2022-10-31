@@ -30,7 +30,38 @@ from _camtrack import (
 )
 
 
-def triangulate(frames, corner_storage, known_corners, known_views, intrinsic_mat, min_angle, last_frame):
+def triangulate(intrinsic_mat, views, points_2d):
+    arr = np.empty(shape=(2 * len(points_2d), 4), dtype=float)
+
+    for i, (view, point_2d) in enumerate(zip(views, points_2d)):
+        p = intrinsic_mat @ view
+        arr[i * 2] = p[2] * point_2d[0] - p[0]
+        arr[i * 2 + 1] = p[2] * point_2d[1] - p[1]
+
+    res = np.linalg.lstsq(arr[:, :3], -arr[:, 3], rcond=None)
+    return res[0]
+
+
+def refine_points_3d(known_points3d, known_corners, known_views, known_frames, corner_storage, intrinsic_mat):
+    threshold = 5
+
+    for idx, corner_id in enumerate(known_corners):
+        points_2d = []
+        views = []
+
+        for frame in known_frames:
+            if corner_id in corner_storage[frame].ids.flatten():
+                views.append(known_views[frame])
+                point_2d = corner_storage[frame].points[(corner_storage[frame].ids.flatten() == corner_id)][0]
+                points_2d.append(point_2d)
+
+        if len(points_2d) >= threshold:
+            new_point_3d = triangulate(intrinsic_mat, views, points_2d)
+            print(f'{idx}. old: {known_points3d[idx]}, new: {new_point_3d}')
+            known_points3d[idx] = new_point_3d
+
+
+def triangulate_2(frames, corner_storage, known_corners, known_views, intrinsic_mat, min_angle, last_frame):
     known_corners = np.sort(known_corners)
     max_new_points = 0
     result_points3d = None
@@ -198,8 +229,8 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
         if i == 0:
             min_angle = 0
 
-        result, points3d, ids = triangulate(last_frames, corner_storage, known_corners,
-                                            known_views, intrinsic_mat, min_angle, last_frames[-1])
+        result, points3d, ids = triangulate_2(last_frames, corner_storage, known_corners,
+                                              known_views, intrinsic_mat, min_angle, last_frames[-1])
 
         if result:
             known_points3d = np.vstack((known_points3d, points3d))
@@ -210,6 +241,9 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
         frames_queue.remove(new_frame)
         known_views[new_frame] = new_view_mat
         last_frames.append(new_frame)
+
+        if i % 20 == 0:
+            refine_points_3d(known_points3d, known_corners, known_views, last_frames, corner_storage, intrinsic_mat)
 
     point_cloud_builder = PointCloudBuilder(known_corners,
                                             known_points3d)
