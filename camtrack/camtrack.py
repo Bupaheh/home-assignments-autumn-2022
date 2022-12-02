@@ -25,7 +25,7 @@ from _camtrack import (
     TriangulationParameters,
     build_correspondences,
     rodrigues_and_translation_to_view_mat3x4,
-    compute_reprojection_errors
+    compute_reprojection_errors, eye3x4
 )
 
 
@@ -65,6 +65,10 @@ def refine_views(known_frames, corner_storage, known_corners, known_points3d, in
         flag = np.isin(corner_storage[frame].ids.flatten(), inliers_list)
 
         flag2 = np.isin(known_corners, corner_storage[frame].ids.flatten()[flag])
+
+        if flag2.sum() < 4:
+            continue
+
         new_view = cv2.solvePnPRansac(known_points3d[flag2], corner_storage[frame].points[flag],
                                       intrinsic_mat, None, reprojectionError=8.0, confidence=0.99,
                                       iterationsCount=100, flags=cv2.SOLVEPNP_ITERATIVE)
@@ -121,6 +125,8 @@ def triangulate_2(frames, corner_storage, known_corners, known_views, intrinsic_
 
 def pnp(frames_queue, corner_storage, known_corners, known_points3d, intrinsic_mat, inliers):
     max_inliers = -1
+    max_corners = -1
+    result_frame_inliers = None
     result_frame = None
 
     for frame in frames_queue:
@@ -128,18 +134,32 @@ def pnp(frames_queue, corner_storage, known_corners, known_points3d, intrinsic_m
 
         if flag.sum() > max_inliers:
             max_inliers = flag.sum()
+            result_frame_inliers = frame
+
+        flag = np.isin(corner_storage[frame].ids.flatten(), known_corners)
+
+        if flag.sum() > max_corners:
+            max_corners = flag.sum()
             result_frame = frame
 
-    flag = np.isin(corner_storage[result_frame].ids.flatten(), inliers)
-    flag2 = np.isin(known_corners, corner_storage[result_frame].ids.flatten()[flag])
+    if max_inliers >= 6:
+        frame = result_frame_inliers
+        corner_list = inliers
+    else:
+        frame = result_frame
+        corner_list = known_corners
 
-    new_view = cv2.solvePnP(known_points3d[flag2], corner_storage[result_frame].points[flag],
+    print(len(corner_list), max_inliers)
+    flag = np.isin(corner_storage[frame].ids.flatten(), corner_list)
+    flag2 = np.isin(known_corners, corner_storage[frame].ids.flatten()[flag])
+
+    new_view = cv2.solvePnP(known_points3d[flag2], corner_storage[frame].points[flag],
                             intrinsic_mat, None, flags=cv2.SOLVEPNP_ITERATIVE)
     view_mat = rodrigues_and_translation_to_view_mat3x4(new_view[1], new_view[2])
 
-    print(f"New frame №{result_frame}. Inliers: {len(inliers)}")
+    print(f"New frame №{frame}. Inliers: {len(inliers)}")
 
-    return result_frame, view_mat
+    return frame, view_mat
 
 
 def pnp_ransac(frames_queue, corner_storage, known_corners, known_points3d, intrinsic_mat, min_corners, inliers):
@@ -156,6 +176,8 @@ def pnp_ransac(frames_queue, corner_storage, known_corners, known_points3d, intr
             continue
 
         flag2 = np.isin(known_corners, corner_storage[frame].ids.flatten()[flag])
+        if flag2.sum() < 4:
+            continue
         new_view = cv2.solvePnPRansac(known_points3d[flag2], corner_storage[frame].points[flag],
                                       intrinsic_mat, None, reprojectionError=8.0, confidence=0.99,
                                       iterationsCount=100, flags=cv2.SOLVEPNP_ITERATIVE)
@@ -191,22 +213,25 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
                           known_view_1: Optional[Tuple[int, Pose]] = None,
                           known_view_2: Optional[Tuple[int, Pose]] = None) \
         -> Tuple[List[Pose], PointCloud]:
-    if known_view_1 is None or known_view_2 is None:
-        raise NotImplementedError()
-
     rgb_sequence = frameseq.read_rgb_f32(frame_sequence_path)
     intrinsic_mat = to_opencv_camera_mat3x3(
         camera_parameters,
         rgb_sequence[0].shape[0]
     )
-
     frame_count = len(corner_storage)
-
     known_views = np.full(shape=frame_count, fill_value=None)
-    known_views[known_view_1[0]] = pose_to_view_mat3x4(known_view_1[1])
-    known_views[known_view_2[0]] = pose_to_view_mat3x4(known_view_2[1])
 
-    last_frames = [known_view_1[0], known_view_2[0]]
+    if known_view_1 is None or known_view_2 is None:
+        frame1, view1, frame2, view2 = init_frames(corner_storage, intrinsic_mat)
+        known_views[frame1] = view1
+        known_views[frame2] = view2
+    else:
+        known_views[known_view_1[0]] = pose_to_view_mat3x4(known_view_1[1])
+        known_views[known_view_2[0]] = pose_to_view_mat3x4(known_view_2[1])
+        frame1 = known_view_1[0]
+        frame2 = known_view_2[0]
+
+    last_frames = [frame1, frame2]
     known_corners = np.empty(shape=0, dtype=int)
     known_points3d = np.empty(shape=(0, 3))
     inliers = set()
@@ -214,7 +239,7 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
     frames_queue = np.array([i for i in range(frame_count) if i != last_frames[-1] and i != last_frames[-2]])
     frames_queue = set(frames_queue)
 
-    min_angle_param = 4
+    min_angle_param = 2
 
     for i in range(frame_count - 2):
         print(f"Frames left: {frame_count - 2 - i}")
@@ -232,7 +257,7 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
             known_corners = np.append(known_corners, ids)
 
         new_frame, new_view_mat = pnp_ransac(frames_queue, corner_storage, known_corners,
-                                             known_points3d, intrinsic_mat, 30, inliers)
+                                             known_points3d, intrinsic_mat, 15, inliers)
         frames_queue.remove(new_frame)
         known_views[new_frame] = new_view_mat
         last_frames.append(new_frame)
@@ -258,6 +283,44 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
     point_cloud = point_cloud_builder.build_point_cloud()
     poses = list(map(view_mat3x4_to_pose, known_views))
     return poses, point_cloud
+
+
+def init_frames(corner_storage: CornerStorage, intrinsic_mat):
+    frame_count = len(corner_storage)
+    best = 1e10
+    res_frame1 = None
+    res_frame2 = None
+    res_view1 = None
+    res_view2 = None
+    step = 5
+
+    for frame1 in range(0, frame_count, step):
+        for frame2 in range(frame1 + step, frame_count, step):
+            _, ids1, ids2 = np.intersect1d(corner_storage[frame1].ids.flatten(), corner_storage[frame2].ids.flatten(), return_indices=True)
+            pts1 = corner_storage[frame1].points[ids1]
+            pts2 = corner_storage[frame2].points[ids2]
+
+            if len(pts1) < 50:
+                break
+
+            essential_mat, inliers = cv2.findEssentialMat(pts1, pts2, intrinsic_mat, cv2.RANSAC)
+
+            _, homography_inliers = cv2.findHomography(pts1, pts2, cv2.RANSAC)
+
+            if homography_inliers.sum() >= inliers.sum() * 0.7:
+                continue
+
+            _, r, t, _ = cv2.recoverPose(essential_mat, pts1, pts2, intrinsic_mat)
+            now = homography_inliers.sum() / inliers.sum()
+
+            if now < best:
+                best = now
+                res_frame1 = frame1
+                res_frame2 = frame2
+                res_view1 = eye3x4()
+                res_view2 = np.hstack((r, t.reshape(-1, 1)))
+
+    return res_frame1, res_view1, res_frame2, res_view2
 
 
 if __name__ == '__main__':
