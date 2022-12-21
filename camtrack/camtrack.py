@@ -85,6 +85,7 @@ def triangulate_2(frames, corner_storage, known_corners, known_views, intrinsic_
     max_new_points = 0
     result_points3d = None
     result_ids = None
+    res_angle = None
 
     for frame in frames:
         if frame == last_frame:
@@ -115,12 +116,10 @@ def triangulate_2(frames, corner_storage, known_corners, known_views, intrinsic_
             max_new_points = len(points3d)
             result_points3d = points3d
             result_ids = ids
+            res_angle = angle
 
-    if result_points3d is not None:
-        print(f"New triangulated points: {len(result_points3d)}")
-        return True, result_points3d, result_ids
-    else:
-        return False, None, None
+    result = result_points3d is not None
+    return result, result_points3d, result_ids, res_angle
 
 
 def pnp(frames_queue, corner_storage, known_corners, known_points3d, intrinsic_mat, inliers):
@@ -153,7 +152,7 @@ def pnp(frames_queue, corner_storage, known_corners, known_points3d, intrinsic_m
     flag = np.isin(corner_storage[frame].ids.flatten(), corner_list)
     flag2 = np.isin(known_corners, corner_storage[frame].ids.flatten()[flag])
 
-    new_view = cv2.solvePnP(known_points3d[flag2], corner_storage[frame].points[flag],
+    new_view = cv2.solvePnPRansac(known_points3d[flag2], corner_storage[frame].points[flag],
                             intrinsic_mat, None, flags=cv2.SOLVEPNP_ITERATIVE)
     view_mat = rodrigues_and_translation_to_view_mat3x4(new_view[1], new_view[2])
 
@@ -249,10 +248,11 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
         if i == 0:
             min_angle = 0
 
-        result, points3d, ids = triangulate_2(last_frames, corner_storage, known_corners,
-                                              known_views, intrinsic_mat, min_angle, last_frames[-1])
+        result, points3d, ids, _ = triangulate_2(last_frames, corner_storage, known_corners,
+                                                 known_views, intrinsic_mat, min_angle, last_frames[-1])
 
         if result:
+            print(f"New triangulated points: {len(points3d)}")
             known_points3d = np.vstack((known_points3d, points3d))
             known_corners = np.append(known_corners, ids)
 
@@ -287,12 +287,15 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
 
 def init_frames(corner_storage: CornerStorage, intrinsic_mat):
     frame_count = len(corner_storage)
-    best = 1e10
+    best = 0
     res_frame1 = None
     res_frame2 = None
     res_view1 = None
     res_view2 = None
     step = 5
+
+    known_views = np.full(shape=frame_count, fill_value=None)
+    known_corners = np.empty(shape=0, dtype=int)
 
     for frame1 in range(0, frame_count, step):
         for frame2 in range(frame1 + step, frame_count, step):
@@ -311,14 +314,23 @@ def init_frames(corner_storage: CornerStorage, intrinsic_mat):
                 continue
 
             _, r, t, _ = cv2.recoverPose(essential_mat, pts1, pts2, intrinsic_mat)
-            now = homography_inliers.sum() / inliers.sum()
+            view1 = eye3x4()
+            view2 = np.hstack((r, t.reshape(-1, 1)))
+            known_views[frame1] = view1
+            known_views[frame2] = view2
 
-            if now < best:
-                best = now
+            flag, _, _, angle = triangulate_2([frame1, frame2], corner_storage, known_corners,
+                                              known_views, intrinsic_mat, 0, frame2)
+
+            known_views[frame1] = None
+            known_views[frame2] = None
+
+            if flag and angle > best:
+                best = angle
                 res_frame1 = frame1
                 res_frame2 = frame2
-                res_view1 = eye3x4()
-                res_view2 = np.hstack((r, t.reshape(-1, 1)))
+                res_view1 = view1
+                res_view2 = view2
 
     return res_frame1, res_view1, res_frame2, res_view2
 

@@ -48,14 +48,17 @@ class _CornerStorageBuilder:
 
 def _build_impl(frame_sequence: pims.FramesSequence,
                 builder: _CornerStorageBuilder) -> None:
-    corner_min_distance = 30
+    corner_min_distance = 20
     max_corners = 500
     quality_level = 0.01
     block_size = 7
     track_barrier_multiplier = 0.3
 
+    if len(frame_sequence) > 150:
+        max_corners = 300
+
     corner_params = dict(qualityLevel=quality_level, minDistance=corner_min_distance, blockSize=block_size)
-    lk_params = dict(winSize=(15, 15), maxLevel=4)
+    lk_params = dict(winSize=(15, 15), maxLevel=5)
 
     prev_image = frame_sequence[0]
     corners = cv2.goodFeaturesToTrack(prev_image, max_corners, **corner_params)
