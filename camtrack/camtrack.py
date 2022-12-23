@@ -265,7 +265,7 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
         print(f"Size of point cloud: {len(known_points3d)}")
         print("-------------------------------")
 
-        if i % 20 == 0 and i != 0:
+        if i % 10 == 0 and i != 0:
             refine_points_3d(known_points3d, known_corners, known_views, last_frames, corner_storage, intrinsic_mat)
             refine_views(last_frames, corner_storage, known_corners, known_points3d, intrinsic_mat, known_views, inliers)
 
