@@ -310,7 +310,7 @@ def init_frames(corner_storage: CornerStorage, intrinsic_mat):
 
             _, homography_inliers = cv2.findHomography(pts1, pts2, cv2.RANSAC)
 
-            if homography_inliers.sum() >= inliers.sum() * 0.7:
+            if homography_inliers.sum() >= inliers.sum():
                 continue
 
             _, r, t, _ = cv2.recoverPose(essential_mat, pts1, pts2, intrinsic_mat)
