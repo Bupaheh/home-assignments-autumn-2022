@@ -195,7 +195,7 @@ def pnp_ransac(frames_queue, corner_storage, known_corners, known_points3d, intr
         known_corners = known_corners[np.logical_not(outlier_flag)]
         known_points3d = known_points3d[np.logical_not(outlier_flag)]
 
-        if error > 10.0:
+        if error > 20.0:
             continue
 
         print(f"New frame №{frame}. Inliers: {len(new_view[3])}")
